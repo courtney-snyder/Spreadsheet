@@ -1,7 +1,7 @@
 ﻿/*
  * Courtney Snyder
  * CptS 321, Homework 7
- * Last Updated: 3/23/2017
+ * Last Updated: 3/30/2017
  * Description: This is where the logic for the spreadsheet app is at.
  */
 
@@ -157,36 +157,51 @@ namespace SpreadsheetEngine
             {
                 if (temp.Text.ElementAt(0) == '=') //If the value starts with =, the input is a formula and it must be evaluated
                 {
-                    string formula = temp.Text;
+                    string formula = temp.Text, sub = "";
+                    int colIndex = 0, rowIndex = 0, i = 0;
+                    Cell inFormula;
+                    bool badref = false;
+                    alphaBool alpha = alphaBool.NOT;
                     string cellName = toAlpha(toEvaluate.mColumnIndex.ToString()) + (toEvaluate.mRowIndex + 1).ToString();
                     formula = formula.Replace(" ", ""); //Get rid of any whitespace in the formula
                     formula = formula.Remove(0, 1); //Remove '='
                     temp.mTree = new ExpTree(formula);
                     Dictionary<string, double> variables = temp.mTree.GetVars(); //Retrieve the variables from the tree
-                    int colIndex = 0;
-                    int rowIndex = 0; //Get the row index
-                    Cell inFormula;
                     var keys = variables.Keys; //Get the variable names
-                    string sub = "";
                     double varVal = 0;
-                    int i = 0;
                     for (i = 0; i < keys.Count; i++) //Lookup each variable in the spreadsheet
                     {
                         string thing = keys.ElementAt(i);
                         varVal = 0;
-                        colIndex = (int)thing[0] - 'A'; //Get column index as an int
                         sub = thing.Substring(1); //Get the row index by separating the letter and number
-                        rowIndex = int.Parse(sub); //Get row index as an int
-                        rowIndex--;
-                        inFormula = GetCell(rowIndex, colIndex); //Get the cell in the formula (eg =A1, this would get A1)
-                        double.TryParse(mSheet[rowIndex, colIndex].Value, out varVal);
-                        temp.mTree.SetVar(thing, varVal); //Set the variable (if tryParse is unsuccessful, varVal = 0)
+                        alpha = isAlpha(thing.ElementAt(0));
+                        if (alpha != alphaBool.NOT && int.TryParse(sub, out rowIndex) && rowIndex > 0 && rowIndex < 50) //If the variable has the form "A thru Z""1-50"
+                        {
+                            colIndex = (int)thing[0] - 'A'; //Get column index as an int
+                            rowIndex--; //Got the rowIndex as an int in the conditional, now subtract one since rows go 1-50 and index goes 0-49
+                            inFormula = GetCell(rowIndex, colIndex); //Get the cell in the formula (eg =A1, this would get A1)
+                            double.TryParse(mSheet[rowIndex, colIndex].Value, out varVal);
+                            temp.mTree.SetVar(thing, varVal); //Set the variable (if tryParse is unsuccessful, varVal = 0)
+                        }
+                        else //If the variable has a variable name that isn't a cell name
+                        {
+                            badref = true;
+                            temp.Value = "!(bad reference)"; //Updated the value, not the text so user can hopefully figure out why it's a bad reference
+                        }
                     }
-                    double result = temp.mTree.Eval();
-                    temp.Value = result.ToString(); //Update current cell's value
-                    UpdateTableAdd(temp); //Add the appropriate dependencies
-                    UpdateTableDelete(temp); //Remove old dependencies
-                    UpdateDependencies(temp); //Update current dependencies
+                    if (!badref)
+                    {
+                        double result = temp.mTree.Eval();
+                        temp.Value = result.ToString(); //Update current cell's value
+                        UpdateTableAdd(temp); //Add the appropriate dependencies
+                        UpdateTableDelete(temp); //Remove old dependencies
+                        if (!checkSelfReference(cellName) && !checkCircularReference(cellName))
+                        {
+                            UpdateDependencies(temp); //Update current dependencies
+                        }
+                        else
+                            temp.Value = "!(self reference)";
+                    }
                     CellPropertyChanged(toEvaluate, new PropertyChangedEventArgs("Value")); //Update the UI
                 }
             }
@@ -262,8 +277,35 @@ namespace SpreadsheetEngine
                     mDependencies.Add(thing, tempHash); //Push thing and hash set to the dependency dictionary
                 }
                 else //If dependencies dictionary contains thing, add cellName to the dependency hash
+                {
                     mDependencies[thing].Add(cellName);
+                }
             }
+        }
+
+        public bool checkSelfReference(string cellName)
+        {
+            if (!mDependencies.ContainsKey(cellName)) //If this cell has no other cell referencing it
+                return false;
+            if (mDependencies[cellName].Contains(cellName)) //If this cell has references, check if it references itself
+                return true;
+            return false;
+        }
+
+        public bool checkCircularReference(string cellName)
+        {
+            string nextCell;
+            if (!mDependencies.ContainsKey(cellName)) //If this cell has no other cell referencing it, it can't have a circular reference
+                return false;
+            for (int i = 0; i < mDependencies[cellName].Count; i++) //Look at all the dependencies of the current cell
+            {
+                nextCell = mDependencies[cellName].ElementAt(i); //Check the dependencies' dependencies
+                if (!mDependencies.ContainsKey(nextCell))
+                    break;
+                if (mDependencies[nextCell].Contains(cellName)) //If a dependency refers back to the current cell, there is a circular reference
+                    return true;
+            }
+            return false;
         }
 
         public void UpdateBGColor(Cell toColor)
@@ -343,6 +385,11 @@ namespace SpreadsheetEngine
                 this.mSheet[randomRow, randomCol].Text = "Hello World!"; //Print Hello World to a random cell
             }
         }
+
+        public enum alphaBool
+        {
+            NOT, UPPER, LOWER
+        };
 
         private string toAlpha(string colIndex)
         {
@@ -462,7 +509,7 @@ namespace SpreadsheetEngine
             }
             return "";
         }
-        public bool isAlpha(char input)
+        public alphaBool isAlpha(char input)
         {
             switch (input)
             {
@@ -492,6 +539,7 @@ namespace SpreadsheetEngine
                 case 'x':
                 case 'y':
                 case 'z':
+                    return alphaBool.LOWER;
                 case 'A':
                 case 'B':
                 case 'C':
@@ -518,9 +566,9 @@ namespace SpreadsheetEngine
                 case 'X':
                 case 'Y':
                 case 'Z':
-                    return true;
+                    return alphaBool.UPPER;
                 default:
-                    return false;
+                    return alphaBool.NOT;
             }
         }
 
@@ -807,7 +855,8 @@ namespace SpreadsheetEngine
                 mCopy = treeDict; //Get a copy of the ExpTree dictionary
                 mName = initName;
                 mValue = 0;
-                treeDict.Add(mName, mValue);
+                if (!treeDict.ContainsKey(initName))
+                    treeDict.Add(mName, mValue);
             }
             public string Name
             {
